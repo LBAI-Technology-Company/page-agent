@@ -116,6 +116,23 @@ export interface AgentConfig extends LLMConfig {
 	// page behavior hooks
 
 	/**
+	 * URL path to a knowledge document for Q&A.
+	 * Fetched from the current page's origin at the start of each task.
+	 * The agent answers questions based on this document and can also perform page operations.
+	 * @example '/question.md'
+	 * @example '/docs/faq.md'
+	 */
+	knowledgeDocUrl?: string
+
+	/**
+	 * Maximum number of conversation rounds to retain across tasks.
+	 * Each round consists of a user question and agent answer.
+	 * Older rounds are discarded when the limit is reached (sliding window).
+	 * @default 20
+	 */
+	maxConversationRounds?: number
+
+	/**
 	 * @experimental
 	 * Enable the experimental script execution tool that allows executing generated JavaScript code on the page.
 	 * @note Can cause unpredictable side effects.

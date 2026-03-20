@@ -17,9 +17,11 @@ const DEMO_MODEL = 'qwen3.5-plus'
 const DEMO_BASE_URL = 'https://page-ag-testing-ohftxirgbn.cn-shanghai.fcapp.run'
 const DEMO_API_KEY = 'NA'
 
+// Capture currentScript synchronously — it becomes null inside setTimeout
+const currentScript = document.currentScript as HTMLScriptElement | null
+
 // in case document.x is not ready yet
 setTimeout(() => {
-	const currentScript = document.currentScript as HTMLScriptElement | null
 	let config: PageAgentConfig
 
 	if (currentScript) {
@@ -28,8 +30,17 @@ setTimeout(() => {
 		const model = url.searchParams.get('model') || DEMO_MODEL
 		const baseURL = url.searchParams.get('baseURL') || DEMO_BASE_URL
 		const apiKey = url.searchParams.get('apiKey') || DEMO_API_KEY
-		const language = (url.searchParams.get('lang') as 'zh-CN' | 'en-US') || 'zh-CN'
-		config = { model, baseURL, apiKey, language }
+		const language = (url.searchParams.get('lang') as 'zh-CN' | 'en-US') || 'en-US'
+		const knowledgeDocUrl = url.searchParams.get('knowledgeDocUrl') || undefined
+		const maxRounds = url.searchParams.get('maxConversationRounds')
+		config = {
+			model,
+			baseURL,
+			apiKey,
+			language,
+			knowledgeDocUrl,
+			maxConversationRounds: maxRounds ? parseInt(maxRounds, 10) : undefined,
+		}
 	} else {
 		console.log('🚀 page-agent.js no current script detected, using default demo config')
 		config = {

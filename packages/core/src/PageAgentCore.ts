@@ -21,7 +21,7 @@ import type {
 	MacroToolInput,
 	MacroToolResult,
 } from './types'
-import { assert, fetchLlmsTxt, normalizeResponse, uid, waitFor } from './utils'
+import { assert, fetchKnowledgeDoc, fetchLlmsTxt, normalizeResponse, uid, waitFor } from './utils'
 
 export { tool, type PageAgentTool } from './tools'
 export type * from './types'
@@ -84,6 +84,10 @@ export class PageAgentCore extends EventTarget {
 	#abortController = new AbortController()
 	#observations: string[] = []
 
+	/** Cross-task conversation history for Q&A continuity */
+	#conversationHistory: { role: 'user' | 'assistant'; content: string }[] = []
+	#maxConversationRounds: number
+
 	/** internal states during a single task execution */
 	#states = {
 		/** Accumulated wait time in seconds */
@@ -100,6 +104,7 @@ export class PageAgentCore extends EventTarget {
 		this.config = { ...config, maxSteps: config.maxSteps ?? 40 }
 
 		this.#llm = new LLM(this.config)
+		this.#maxConversationRounds = config.maxConversationRounds ?? 20
 		this.tools = new Map(tools)
 		this.pageController = config.pageController
 
@@ -184,6 +189,11 @@ export class PageAgentCore extends EventTarget {
 	 */
 	pushObservation(content: string): void {
 		this.#observations.push(content)
+	}
+
+	/** Clear cross-task conversation history */
+	clearConversationHistory(): void {
+		this.#conversationHistory = []
 	}
 
 	/** Stop the current task. Agent remains reusable. */
@@ -302,6 +312,7 @@ export class PageAgentCore extends EventTarget {
 					const text = action.input?.text || 'no text provided'
 					console.log(chalk.green.bold('Task completed'), success, text)
 					this.#onDone(success)
+					this.#recordConversation(task, text)
 					const result: ExecutionResult = {
 						success,
 						data: text,
@@ -320,6 +331,7 @@ export class PageAgentCore extends EventTarget {
 				this.history.push({ type: 'error', message: errorMessage, rawResponse: error })
 				this.#emitHistoryChange()
 				this.#onDone(false)
+				this.#recordConversation(task, errorMessage)
 				const result: ExecutionResult = {
 					success: false,
 					data: errorMessage,
@@ -335,6 +347,7 @@ export class PageAgentCore extends EventTarget {
 				this.history.push({ type: 'error', message: errorMessage })
 				this.#emitHistoryChange()
 				this.#onDone(false)
+				this.#recordConversation(task, errorMessage)
 				const result: ExecutionResult = {
 					success: false,
 					data: errorMessage,
@@ -463,7 +476,7 @@ export class PageAgentCore extends EventTarget {
 	 * Get instructions from config
 	 */
 	async #getInstructions(): Promise<string> {
-		const { instructions, experimentalLlmsTxt } = this.config
+		const { instructions, experimentalLlmsTxt, knowledgeDocUrl } = this.config
 
 		const systemInstructions = instructions?.system?.trim()
 		let pageInstructions: string | undefined
@@ -482,7 +495,13 @@ export class PageAgentCore extends EventTarget {
 
 		const llmsTxt = experimentalLlmsTxt && url ? await fetchLlmsTxt(url) : undefined
 
-		if (!systemInstructions && !pageInstructions && !llmsTxt) return ''
+		let knowledgeDoc: string | undefined
+		if (knowledgeDocUrl && url) {
+			const doc = await fetchKnowledgeDoc(url, knowledgeDocUrl)
+			if (doc) knowledgeDoc = doc
+		}
+
+		if (!systemInstructions && !pageInstructions && !llmsTxt && !knowledgeDoc) return ''
 
 		let result = '<instructions>\n'
 
@@ -496,6 +515,19 @@ export class PageAgentCore extends EventTarget {
 
 		if (llmsTxt) {
 			result += `<llms_txt>\n${llmsTxt}\n</llms_txt>\n`
+		}
+
+		if (knowledgeDoc) {
+			result += '<knowledge_doc>\n'
+			result += 'Below is a knowledge document from the current website.\n'
+			result +=
+				'- When the user asks questions, answer based on this document and the current page state.\n'
+			result +=
+				'- If the question involves page operations, explain the answer first, then use ask_user to ask if the user wants you to perform the operation.\n'
+			result += '- If the user confirms, proceed with the page operations.\n'
+			result += '- For pure information questions, answer directly using the done tool.\n\n'
+			result += knowledgeDoc + '\n'
+			result += '</knowledge_doc>\n'
 		}
 
 		result += '</instructions>\n\n'
@@ -558,6 +590,21 @@ export class PageAgentCore extends EventTarget {
 
 		prompt += await this.#getInstructions()
 
+		// <conversation_history> (optional, for cross-task Q&A continuity)
+
+		if (this.#conversationHistory.length > 0) {
+			prompt += '<conversation_history>\n'
+			for (let i = 0; i < this.#conversationHistory.length; i += 2) {
+				const user = this.#conversationHistory[i]
+				const assistant = this.#conversationHistory[i + 1]
+				const round = Math.floor(i / 2) + 1
+				prompt += `[Round ${round}]\n`
+				if (user) prompt += `User: ${user.content}\n`
+				if (assistant) prompt += `Assistant: ${assistant.content}\n`
+			}
+			prompt += '</conversation_history>\n\n'
+		}
+
 		// <agent_state>
 		//  - <user_request>
 		//  - <step_info>
@@ -617,6 +664,18 @@ export class PageAgentCore extends EventTarget {
 		prompt += '</browser_state>\n\n'
 
 		return prompt
+	}
+
+	/** Record a conversation round and enforce the sliding window */
+	#recordConversation(userMessage: string, assistantMessage: string): void {
+		this.#conversationHistory.push(
+			{ role: 'user', content: userMessage },
+			{ role: 'assistant', content: assistantMessage }
+		)
+		const maxMessages = this.#maxConversationRounds * 2
+		if (this.#conversationHistory.length > maxMessages) {
+			this.#conversationHistory = this.#conversationHistory.slice(-maxMessages)
+		}
 	}
 
 	#onDone(success = true) {

@@ -95,6 +95,35 @@ export async function fetchLlmsTxt(url: string): Promise<string | null> {
 }
 
 /**
+ * Fetch a knowledge document from the current page's origin.
+ * Unlike llms.txt, this is NOT cached — always fetches fresh content.
+ */
+export async function fetchKnowledgeDoc(pageUrl: string, docPath: string): Promise<string | null> {
+	let origin: string
+	try {
+		origin = new URL(pageUrl).origin
+	} catch {
+		return null
+	}
+	if (origin === 'null') return null
+
+	const endpoint = `${origin}${docPath.startsWith('/') ? '' : '/'}${docPath}`
+	try {
+		console.log(chalk.gray(`[knowledge-doc] Fetching ${endpoint}`))
+		const res = await fetch(endpoint, { signal: AbortSignal.timeout(5000) })
+		if (res.ok) {
+			const text = await res.text()
+			console.log(chalk.green(`[knowledge-doc] Loaded (${text.length} chars)`))
+			return text
+		}
+		console.debug(chalk.gray(`[knowledge-doc] ${res.status} for ${endpoint}`))
+	} catch (e) {
+		console.debug(chalk.gray(`[knowledge-doc] Failed to fetch ${endpoint}`), e)
+	}
+	return null
+}
+
+/**
  * Simple assertion function that throws an error if the condition is falsy
  * @param condition - The condition to assert
  * @param message - Optional error message
