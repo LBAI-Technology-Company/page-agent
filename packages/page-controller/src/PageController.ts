@@ -18,6 +18,7 @@ import * as dom from './dom'
 import type { FlatDomTree, InteractiveElementDomNode } from './dom/dom_tree/type'
 import { getPageInfo } from './dom/getPageInfo'
 import { patchReact } from './patches/react'
+import { isAnchorElement } from './utils'
 
 /**
  * Configuration for PageController
@@ -217,6 +218,7 @@ export class PageController extends EventTarget {
 	 * Clean up all element highlights
 	 */
 	async cleanUpHighlights(): Promise<void> {
+		console.log('[PageController] cleanUpHighlights')
 		dom.cleanUpHighlights()
 	}
 
@@ -243,7 +245,7 @@ export class PageController extends EventTarget {
 			await clickElement(element)
 
 			// Handle links that open in new tabs
-			if (element instanceof HTMLAnchorElement && element.target === '_blank') {
+			if (isAnchorElement(element) && element.target === '_blank') {
 				return {
 					success: true,
 					message: `✅ Clicked element (${elemText ?? index}). ⚠️ Link opened in a new tab.`,
@@ -423,3 +425,5 @@ export class PageController extends EventTarget {
 		this.mask = null
 	}
 }
+
+export * from './actions'

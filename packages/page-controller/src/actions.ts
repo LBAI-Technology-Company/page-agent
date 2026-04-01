@@ -3,27 +3,22 @@
  * All rights reserved.
  */
 import type { InteractiveElementDomNode } from './dom/dom_tree/type'
-
-// ======= general utils =======
-
-async function waitFor(seconds: number): Promise<void> {
-	await new Promise((resolve) => setTimeout(resolve, seconds * 1000))
-}
-
-// ======= dom utils =======
-
-export async function movePointerToElement(element: HTMLElement) {
-	const rect = element.getBoundingClientRect()
-	const x = rect.left + rect.width / 2
-	const y = rect.top + rect.height / 2
-
-	window.dispatchEvent(new CustomEvent('PageAgent::MovePointerTo', { detail: { x, y } }))
-
-	await waitFor(0.3)
-}
+import {
+	clickPointer,
+	disablePassThrough,
+	enablePassThrough,
+	getNativeValueSetter,
+	isHTMLElement,
+	isInputElement,
+	isSelectElement,
+	isTextAreaElement,
+	movePointerToElement,
+	waitFor,
+} from './utils'
 
 /**
  * Get the HTMLElement by index from a selectorMap.
+ * @private Internal method, subject to change at any time.
  */
 export function getElementByIndex(
 	selectorMap: Map<number, InteractiveElementDomNode>,
@@ -39,7 +34,7 @@ export function getElementByIndex(
 		throw new Error(`Element at index ${index} does not have a reference`)
 	}
 
-	if (!(element instanceof HTMLElement)) {
+	if (!isHTMLElement(element)) {
 		throw new Error(`Element at index ${index} is not an HTMLElement`)
 	}
 
@@ -50,67 +45,92 @@ let lastClickedElement: HTMLElement | null = null
 
 function blurLastClickedElement() {
 	if (lastClickedElement) {
+		lastClickedElement.dispatchEvent(new PointerEvent('pointerout', { bubbles: true }))
+		lastClickedElement.dispatchEvent(new PointerEvent('pointerleave', { bubbles: false }))
+		lastClickedElement.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }))
+		lastClickedElement.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }))
 		lastClickedElement.blur()
-		lastClickedElement.dispatchEvent(
-			new MouseEvent('mouseout', { bubbles: true, cancelable: true })
-		)
-		lastClickedElement.dispatchEvent(
-			new MouseEvent('mouseleave', { bubbles: false, cancelable: true })
-		)
 		lastClickedElement = null
 	}
 }
 
 /**
- * Simulate a click on the element
+ * Simulate a full click following W3C Pointer Events + UI Events spec order:
+ * pointerover/enter → mouseover/enter → pointerdown → mousedown → [focus] →
+ * pointerup → mouseup → click
+ *
+ * @private Internal method, subject to change at any time.
  */
 export async function clickElement(element: HTMLElement) {
 	blurLastClickedElement()
 
 	lastClickedElement = element
+
 	await scrollIntoViewIfNeeded(element)
-	await movePointerToElement(element)
-	window.dispatchEvent(new CustomEvent('PageAgent::ClickPointer'))
+	const frame = element.ownerDocument.defaultView?.frameElement
+	if (frame) await scrollIntoViewIfNeeded(frame)
+
+	const rect = element.getBoundingClientRect()
+	const x = rect.left + rect.width / 2
+	const y = rect.top + rect.height / 2
+
+	await movePointerToElement(element, x, y)
+	await clickPointer()
+
 	await waitFor(0.1)
 
-	// hover it
-	element.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true }))
-	element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true }))
+	// Hit-test to find the deepest element at click coordinates, matching
+	// real browser behavior where events target the innermost element.
+	// @note This may hit a element in the blacklist
+	// TODO: This is a temporary workaround. Should have been handled during dom extraction.
+	const doc = element.ownerDocument
+	await enablePassThrough()
+	const hitTarget = doc.elementFromPoint(x, y)
+	await disablePassThrough()
+	const target =
+		hitTarget instanceof HTMLElement && element.contains(hitTarget) ? hitTarget : element
 
-	// dispatch a sequence of events to ensure all listeners are triggered
-	element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+	const pointerOpts = {
+		bubbles: true,
+		cancelable: true,
+		clientX: x,
+		clientY: y,
+		pointerType: 'mouse',
+	}
+	const mouseOpts = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }
 
-	// focus it to ensure it gets the click event
-	element.focus()
+	// Hover — pointer events first, then mouse events (spec order)
+	target.dispatchEvent(new PointerEvent('pointerover', pointerOpts))
+	target.dispatchEvent(new PointerEvent('pointerenter', { ...pointerOpts, bubbles: false }))
+	target.dispatchEvent(new MouseEvent('mouseover', mouseOpts))
+	target.dispatchEvent(new MouseEvent('mouseenter', { ...mouseOpts, bubbles: false }))
 
-	element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
-	element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+	// Press
+	target.dispatchEvent(new PointerEvent('pointerdown', pointerOpts))
+	target.dispatchEvent(new MouseEvent('mousedown', mouseOpts))
 
-	// dispatch a click event
-	// element.click()
+	// Focus is not part of the standard pointer/mouse event sequence
+	// "undefined and varies between user agents".
+	// We focus the original element (nearest focusable ancestor), not the hit-test target, matching browser behavior.
+	element.focus({ preventScroll: true })
 
-	await waitFor(0.2) // Wait to ensure click event processing completes
+	// Release
+	target.dispatchEvent(new PointerEvent('pointerup', pointerOpts))
+	target.dispatchEvent(new MouseEvent('mouseup', mouseOpts))
+
+	// Click — activation behavior (navigation, form submit, etc.) triggers
+	// via bubbling from target up to the interactive ancestor.
+	target.click()
+
+	await waitFor(0.2)
 }
 
-// eslint-disable-next-line @typescript-eslint/unbound-method
-const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-	window.HTMLInputElement.prototype,
-	'value'
-)!.set!
-
-// eslint-disable-next-line @typescript-eslint/unbound-method
-const nativeTextAreaValueSetter = Object.getOwnPropertyDescriptor(
-	window.HTMLTextAreaElement.prototype,
-	'value'
-)!.set!
-
+/**
+ * @private Internal method, subject to change at any time.
+ */
 export async function inputTextElement(element: HTMLElement, text: string) {
 	const isContentEditable = element.isContentEditable
-	if (
-		!(element instanceof HTMLInputElement) &&
-		!(element instanceof HTMLTextAreaElement) &&
-		!isContentEditable
-	) {
+	if (!isInputElement(element) && !isTextAreaElement(element) && !isContentEditable) {
 		throw new Error('Element is not an input, textarea, or contenteditable')
 	}
 
@@ -181,16 +201,17 @@ export async function inputTextElement(element: HTMLElement, text: string) {
 			element.focus()
 
 			// Select all existing content and delete it
-			const selection = window.getSelection()
-			const range = document.createRange()
+			const doc = element.ownerDocument
+			const selection = (doc.defaultView || window).getSelection()
+			const range = doc.createRange()
 			range.selectNodeContents(element)
 			selection?.removeAllRanges()
 			selection?.addRange(range)
 
 			// eslint-disable-next-line @typescript-eslint/no-deprecated
-			document.execCommand('delete', false)
+			doc.execCommand('delete', false)
 			// eslint-disable-next-line @typescript-eslint/no-deprecated
-			document.execCommand('insertText', false, text)
+			doc.execCommand('insertText', false, text)
 		}
 
 		// Dispatch change event (for good measure)
@@ -198,10 +219,8 @@ export async function inputTextElement(element: HTMLElement, text: string) {
 
 		// Trigger blur for validation
 		element.blur()
-	} else if (element instanceof HTMLTextAreaElement) {
-		nativeTextAreaValueSetter.call(element, text)
 	} else {
-		nativeInputValueSetter.call(element, text)
+		getNativeValueSetter(element as HTMLInputElement | HTMLTextAreaElement).call(element, text)
 	}
 
 	// Only dispatch shared input event for non-contenteditable (contenteditable has its own)
@@ -216,9 +235,10 @@ export async function inputTextElement(element: HTMLElement, text: string) {
 
 /**
  * @todo browser-use version is very complex and supports menu tags, need to follow up
+ * @private Internal method, subject to change at any time.
  */
 export async function selectOptionElement(selectElement: HTMLSelectElement, optionText: string) {
-	if (!(selectElement instanceof HTMLSelectElement)) {
+	if (!isSelectElement(selectElement)) {
 		throw new Error('Element is not a select element')
 	}
 
@@ -235,11 +255,14 @@ export async function selectOptionElement(selectElement: HTMLSelectElement, opti
 	await waitFor(0.1) // Wait to ensure change event processing completes
 }
 
-interface ScrollableElement extends HTMLElement {
+interface ScrollableElement extends Element {
 	scrollIntoViewIfNeeded?: (centerIfNeeded?: boolean) => void
 }
 
-export async function scrollIntoViewIfNeeded(element: HTMLElement) {
+/**
+ * @private Internal method, subject to change at any time.
+ */
+export async function scrollIntoViewIfNeeded(element: Element) {
 	const el = element as ScrollableElement
 	if (typeof el.scrollIntoViewIfNeeded === 'function') {
 		el.scrollIntoViewIfNeeded()
@@ -251,6 +274,9 @@ export async function scrollIntoViewIfNeeded(element: HTMLElement) {
 	}
 }
 
+/**
+ * @private Internal method, subject to change at any time.
+ */
 export async function scrollVertically(
 	down: boolean,
 	scroll_amount: number,
@@ -379,6 +405,9 @@ export async function scrollVertically(
 	}
 }
 
+/**
+ * @private Internal method, subject to change at any time.
+ */
 export async function scrollHorizontally(
 	right: boolean,
 	scroll_amount: number,
