@@ -90,6 +90,7 @@ export class Panel {
 		this.#startHeaderUpdateLoop()
 
 		this.#showInputArea()
+		this.#expand()
 
 		this.hide() // Start hidden
 	}
@@ -204,12 +205,12 @@ export class Panel {
 		this.wrapper.style.display = 'block'
 		void this.wrapper.offsetHeight
 		this.wrapper.style.opacity = '1'
-		this.wrapper.style.transform = 'translateX(-50%) translateY(0)'
+		this.wrapper.style.transform = 'translateY(0)'
 	}
 
 	hide(): void {
 		this.wrapper.style.opacity = '0'
-		this.wrapper.style.transform = 'translateX(-50%) translateY(20px)'
+		this.wrapper.style.transform = 'translateY(20px)'
 		this.wrapper.style.display = 'none'
 	}
 
@@ -217,7 +218,7 @@ export class Panel {
 		this.#statusText.textContent = this.#i18n.t('ui.panel.ready')
 		this.#updateStatusIndicator('thinking')
 		this.#renderHistory()
-		this.#collapse()
+		this.#expand()
 		// Reset user input state
 		this.#isWaitingForUserAnswer = false
 		this.#userAnswerResolver = null

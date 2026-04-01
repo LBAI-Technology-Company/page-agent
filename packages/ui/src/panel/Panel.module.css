@@ -1,8 +1,7 @@
 .wrapper {
 	position: fixed;
-	bottom: 100px;
-	left: 50%;
-	transform: translateX(-50%) translateY(20px);
+	bottom: 20px;
+	transform: translateY(20px);
 	opacity: 0;
 	z-index: 2147483642; /* 比 SimulatorMask 高一层 */
 	box-sizing: border-box;
@@ -13,12 +12,14 @@
 		box-sizing: border-box;
 	}
 
-	--width: 360px;
+	--width: 140px;
 	--height: 40px;
 	--border-radius: 12px;
+	--current-border-radius: var(--border-radius) 0 0 var(--border-radius);
+	--bg-inset: -2px 0 -2px -8px;
 
 	--side-space: 12px; /* 控制栏两侧的间距 */
-	--history-width: calc(var(--width) - var(--side-space) * 2);
+	--history-width: calc(360px - var(--side-space) * 2);
 
 	--color-1: rgb(57, 182, 255);
 	--color-2: rgb(189, 69, 251);
@@ -27,8 +28,16 @@
 
 	width: var(--width);
 	height: var(--height);
+	right: 0;
 
 	transition: all 0.3s ease-in-out;
+
+	&.expanded {
+		--width: 360px;
+		--current-border-radius: var(--border-radius);
+		--bg-inset: -2px -8px;
+		right: 20px;
+	}
 
 	/* 响应式设计 */
 	@media (max-width: 480px) {
@@ -38,8 +47,8 @@
 
 	.background {
 		position: absolute;
-		inset: -2px -8px;
-		border-radius: calc(var(--border-radius) + 4px);
+		inset: var(--bg-inset);
+		border-radius: var(--current-border-radius);
 		filter: blur(16px);
 		overflow: hidden;
 		/* mix-blend-mode: lighten; */
@@ -111,7 +120,7 @@
 
 	background: rgba(0, 0, 0, 0.5);
 	backdrop-filter: blur(10px);
-	border-radius: var(--border-radius);
+	border-radius: var(--current-border-radius);
 	background-clip: padding-box;
 
 	box-shadow:
@@ -124,6 +133,7 @@
 		gap: 8px;
 		flex: 1;
 		min-height: 24px; /* 确保垂直居中 */
+		overflow: hidden;
 
 		.indicator {
 			width: 6px;
@@ -166,13 +176,14 @@
 		.statusText {
 			color: white;
 			font-size: 12px;
-			line-height: 1;
+			line-height: 24px;
 			font-weight: 500;
 			transition: all 0.3s ease-in-out;
 			position: relative;
 			overflow: hidden;
-			display: flex;
-			align-items: center;
+			white-space: nowrap;
+			text-overflow: ellipsis;
+			display: block;
 			min-height: 24px; /* 确保垂直居中 */
 
 			&.fadeOut {
@@ -543,10 +554,10 @@
 	left: var(--side-space);
 	z-index: -1;
 
-	visibility: visible;
+	visibility: collapse;
 	overflow: hidden;
 
-	height: 48px;
+	height: 0;
 
 	transition: all 0.2s;
 
@@ -558,6 +569,11 @@
 
 	border: 2px solid rgba(255, 255, 255, 0.3);
 	box-shadow: 0 1px 16px rgba(0, 0, 0, 0.4);
+
+	.expanded &:not(.hidden) {
+		visibility: visible;
+		height: 48px;
+	}
 
 	&.hidden {
 		visibility: collapse;
